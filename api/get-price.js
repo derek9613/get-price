@@ -1,5 +1,8 @@
+import chromium from '@sparticuz/chromium';
+import puppeteer from 'puppeteer-core';
+
 export default async function handler(req, res) {
-  // 設定 CORS，允許 Webflow 存取
+  // 設定 CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -8,29 +11,44 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  const targetUrl = "https://www.cfbenchmarks.com/data/indices/BRTI";
+  let browser = null;
 
   try {
-    const response = await fetch(targetUrl, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5"
-      }
+    // 啟動無頭瀏覽器
+    browser = await puppeteer.launch({
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath(),
+      headless: chromium.headless,
     });
 
-    const html = await response.text();
+    const page = await browser.newPage();
+    
+    # 設置真實瀏覽器 User-Agent
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    );
 
-    // 解析 HTML 中的價格欄位 (tabular-nums)
-    const priceMatch = html.match(/<span[^>]*class="[^"]*tabular-nums[^"]*"[^>]*>([^<]+)<\/span>/);
+    # 前往目標網站並等待網路請求完成
+    await page.goto("https://www.cfbenchmarks.com/data/indices/BRTI", {
+      waitUntil: "networkidle2",
+      timeout: 20000,
+    });
 
-    let price = "$ --,--";
-    if (priceMatch && priceMatch[1]) {
-      price = priceMatch[1].trim();
-    }
+    # 等待包含價格的 CSS Selector 渲染出來
+    await page.waitForSelector("span.tabular-nums", { timeout: 10000 });
 
-    return res.status(200).json({ price: price });
+    # 擷取畫面上的價格文字
+    const rawPrice = await page.$eval("span.tabular-nums", (el) => el.textContent.trim());
+
+    await browser.close();
+
+    # 強制不快取，確保每次呼叫都是當下最新的即時價格
+    res.setHeader("Cache-Control", "no-store, max-age=0");
+    return res.status(200).json({ price: rawPrice });
+
   } catch (error) {
+    if (browser) await browser.close();
     return res.status(500).json({ error: error.message });
   }
 }
