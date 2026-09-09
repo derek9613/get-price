@@ -1,5 +1,9 @@
 {
-  "name": "brti-proxy",
+  "name": "get-price",
   "version": "1.0.0",
-  "private": true
+  "private": true,
+  "dependencies": {
+    "@sparticuz/chromium": "^122.0.0",
+    "puppeteer-core": "^22.0.0"
+  }
 }
