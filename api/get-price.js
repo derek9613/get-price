@@ -1,8 +1,5 @@
-import chromium from '@sparticuz/chromium';
-import puppeteer from 'puppeteer-core';
-
 export default async function handler(req, res) {
-  // 設定 CORS
+  // 設定 CORS 允許 Webflow 呼叫
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -11,44 +8,67 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  let browser = null;
+  const targetUrl = "https://www.cfbenchmarks.com/data/indices/BRTI";
 
   try {
-    // 啟動無頭瀏覽器
-    browser = await puppeteer.launch({
-      args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
-      executablePath: await chromium.executablePath(),
-      headless: chromium.headless,
+    const response = await fetch(targetUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache"
+      }
     });
 
-    const page = await browser.newPage();
-    
-    # 設置真實瀏覽器 User-Agent
-    await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    );
+    const html = await response.text();
 
-    # 前往目標網站並等待網路請求完成
-    await page.goto("https://www.cfbenchmarks.com/data/indices/BRTI", {
-      waitUntil: "networkidle2",
-      timeout: 20000,
-    });
+    // 1. 優先嘗試從 HTML 內嵌的 __NEXT_DATA__ JSON 數據中精確解析 BRTI 實時價格
+    let price = null;
+    const nextDataMatch = html.match(/<script id="__NEXT_DATA__" type="application\/json">([^<]+)<\/script>/);
 
-    # 等待包含價格的 CSS Selector 渲染出來
-    await page.waitForSelector("span.tabular-nums", { timeout: 10000 });
+    if (nextDataMatch && nextDataMatch[1]) {
+      try {
+        const nextData = JSON.parse(nextDataMatch[1]);
+        // 遞迴尋找 JSON 中的 BRTI 價格數值
+        const findPrice = (obj) => {
+          if (!obj || typeof obj !== 'object') return null;
+          if ((obj.id === 'BRTI' || obj.ticker === 'BRTI') && (obj.price || obj.value)) {
+            return obj.price || obj.value;
+          }
+          for (const key of Object.keys(obj)) {
+            const found = findPrice(obj[key]);
+            if (found) return found;
+          }
+          return null;
+        };
+        const parsedPrice = findPrice(nextData);
+        if (parsedPrice) {
+          price = `$${Number(parsedPrice).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        }
+      } catch (e) {
+        console.error("JSON 解析失敗，改用 DOM 匹配");
+      }
+    }
 
-    # 擷取畫面上的價格文字
-    const rawPrice = await page.$eval("span.tabular-nums", (el) => el.textContent.trim());
+    // 2. 若 JSON 沒取到，降級使用正則精確匹配 DOM 上的 price 欄位
+    if (!price) {
+      const priceMatch = html.match(/class="[^"]*tabular-nums[^"]*"[^>]*>\s*(\$[\d,]+\.\d+)\s*</);
+      if (priceMatch && priceMatch[1]) {
+        price = priceMatch[1].trim();
+      }
+    }
 
-    await browser.close();
+    // 防快取 Header，確保每一次請求都是即時資料
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
 
-    # 強制不快取，確保每次呼叫都是當下最新的即時價格
-    res.setHeader("Cache-Control", "no-store, max-age=0");
-    return res.status(200).json({ price: rawPrice });
+    if (price) {
+      return res.status(200).json({ price: price });
+    } else {
+      return res.status(404).json({ error: "無法解析即時價格" });
+    }
 
   } catch (error) {
-    if (browser) await browser.close();
     return res.status(500).json({ error: error.message });
   }
 }
