@@ -46,7 +46,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // 2. DOM 降級正則解析
+    // 2. DOM 正則降級解析
     if (!rawPrice) {
       const priceMatch = html.match(/class="[^"]*tabular-nums[^"]*"[^>]*>\s*\$?([\d,]+\.\d+)\s*</);
       if (priceMatch && priceMatch[1]) {
@@ -61,14 +61,29 @@ export default async function handler(req, res) {
     const numericPrice = Number(rawPrice);
     const now = new Date();
 
-    // 格式化時間 (例如: 14:35:08)
-    const formattedTime = now.toLocaleTimeString('zh-TW', { hour12: false });
+    // 強制指定時區為台灣時間 (Asia/Taipei)
+    const formattedTime = now.toLocaleTimeString('zh-TW', {
+      timeZone: 'Asia/Taipei',
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
+
+    // 完整日期格式 (例: 2026/09/10)
+    const formattedDate = now.toLocaleDateString('zh-TW', {
+      timeZone: 'Asia/Taipei',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
 
     return res.status(200).json({
       symbol: "BRTI",
       price: numericPrice,
       formatted_price: `$${numericPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-      formatted_time: formattedTime,
+      formatted_time: formattedTime,                           // 例: "14:35:08"
+      formatted_datetime: `${formattedDate} ${formattedTime}`, // 例: "2026/09/10 14:35:08"
       timestamp: now.toISOString()
     });
 
