@@ -1,5 +1,4 @@
 export default async function handler(req, res) {
-  // 設定 CORS Header 供 Webflow 前端跨域讀取
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -10,7 +9,6 @@ export default async function handler(req, res) {
   }
 
   try {
-    // 請求 BRTI 頁面原始碼
     const response = await fetch("https://www.cfbenchmarks.com/data/indices/BRTI", {
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -26,14 +24,11 @@ export default async function handler(req, res) {
     const html = await response.text();
     let rawPrice = null;
 
-    // 1. 從 Next.js 頁面注入的 __NEXT_DATA__ JSON 數據中提取實時價格
+    // 1. 從 Next.js __NEXT_DATA__ 抓取價格
     const nextDataMatch = html.match(/<script id="__NEXT_DATA__" type="application\/json">([^<]+)<\/script>/);
-    
     if (nextDataMatch && nextDataMatch[1]) {
       try {
         const nextData = JSON.parse(nextDataMatch[1]);
-        
-        // 遞迴尋找 JSON 中的 BRTI 價格數值
         const findPriceInObj = (obj) => {
           if (!obj || typeof obj !== 'object') return null;
           if ((obj.id === 'BRTI' || obj.ticker === 'BRTI' || obj.name === 'BRTI') && (obj.price || obj.value)) {
@@ -45,14 +40,13 @@ export default async function handler(req, res) {
           }
           return null;
         };
-        
         rawPrice = findPriceInObj(nextData);
       } catch (e) {
         console.error("JSON 解析失敗:", e);
       }
     }
 
-    // 2. 若 Next.js State 中未找尋到，降級使用 DOM 正則標籤抓取
+    // 2. DOM 降級正則解析
     if (!rawPrice) {
       const priceMatch = html.match(/class="[^"]*tabular-nums[^"]*"[^>]*>\s*\$?([\d,]+\.\d+)\s*</);
       if (priceMatch && priceMatch[1]) {
@@ -61,16 +55,21 @@ export default async function handler(req, res) {
     }
 
     if (!rawPrice) {
-      throw new Error("無法解析當前 BRTI 價格，請檢查網頁結構。");
+      throw new Error("無法解析當前 BRTI 價格");
     }
 
     const numericPrice = Number(rawPrice);
+    const now = new Date();
+
+    // 格式化時間 (例如: 14:35:08)
+    const formattedTime = now.toLocaleTimeString('zh-TW', { hour12: false });
 
     return res.status(200).json({
       symbol: "BRTI",
       price: numericPrice,
       formatted_price: `$${numericPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-      timestamp: new Date().toISOString()
+      formatted_time: formattedTime,
+      timestamp: now.toISOString()
     });
 
   } catch (error) {
