@@ -1,5 +1,5 @@
 export default async function handler(req, res) {
-  // 1. 設定 CORS 允許 Webflow 存取
+  // 設定 CORS Header 供 Webflow 前端跨域讀取
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -10,35 +10,58 @@ export default async function handler(req, res) {
   }
 
   try {
-    // 呼叫該網站真實存在的內部數據 JSON 端點
-    const response = await fetch("https://www.cfbenchmarks.com/data/indices/index.json", {
+    // 請求 BRTI 頁面原始碼
+    const response = await fetch("https://www.cfbenchmarks.com/data/indices/BRTI", {
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "application/json",
-        "Referer": "https://www.cfbenchmarks.com/data/indices/BRTI"
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Cache-Control": "no-cache"
       }
     });
 
     if (!response.ok) {
-      throw new Error(`CF 數據請求失敗，HTTP 狀態碼: ${response.status}`);
+      throw new Error(`網頁請求失敗，HTTP 狀態碼: ${response.status}`);
     }
 
-    const data = await response.json();
-    
-    // 陣列或物件解析：尋找 id 或 ticker 為 BRTI 的項目
+    const html = await response.text();
     let rawPrice = null;
 
-    if (Array.isArray(data)) {
-      const brtiItem = data.find(item => item.id === "BRTI" || item.ticker === "BRTI" || item.name === "BRTI");
-      if (brtiItem) {
-        rawPrice = brtiItem.price || brtiItem.value || brtiItem.last;
+    // 1. 從 Next.js 頁面注入的 __NEXT_DATA__ JSON 數據中提取實時價格
+    const nextDataMatch = html.match(/<script id="__NEXT_DATA__" type="application\/json">([^<]+)<\/script>/);
+    
+    if (nextDataMatch && nextDataMatch[1]) {
+      try {
+        const nextData = JSON.parse(nextDataMatch[1]);
+        
+        // 遞迴尋找 JSON 中的 BRTI 價格數值
+        const findPriceInObj = (obj) => {
+          if (!obj || typeof obj !== 'object') return null;
+          if ((obj.id === 'BRTI' || obj.ticker === 'BRTI' || obj.name === 'BRTI') && (obj.price || obj.value)) {
+            return obj.price || obj.value;
+          }
+          for (const key of Object.keys(obj)) {
+            const found = findPriceInObj(obj[key]);
+            if (found) return found;
+          }
+          return null;
+        };
+        
+        rawPrice = findPriceInObj(nextData);
+      } catch (e) {
+        console.error("JSON 解析失敗:", e);
       }
-    } else if (typeof data === "object") {
-      rawPrice = data.BRTI?.price || data.BRTI?.value || data.price || data.value;
+    }
+
+    // 2. 若 Next.js State 中未找尋到，降級使用 DOM 正則標籤抓取
+    if (!rawPrice) {
+      const priceMatch = html.match(/class="[^"]*tabular-nums[^"]*"[^>]*>\s*\$?([\d,]+\.\d+)\s*</);
+      if (priceMatch && priceMatch[1]) {
+        rawPrice = priceMatch[1].replace(/,/g, '');
+      }
     }
 
     if (!rawPrice) {
-      throw new Error("無法從 JSON 中解析出 BRTI 價格數值");
+      throw new Error("無法解析當前 BRTI 價格，請檢查網頁結構。");
     }
 
     const numericPrice = Number(rawPrice);
