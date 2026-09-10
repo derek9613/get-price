@@ -1,9 +1,8 @@
 export default async function handler(req, res) {
-  // 1. 設定 CORS 允許 Webflow 前端跨域呼叫
+  // 1. 設定 CORS 允許 Webflow 存取
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  // 2. 禁用快取，保證每次請求都是當下最新價格
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
 
   if (req.method === "OPTIONS") {
@@ -11,8 +10,8 @@ export default async function handler(req, res) {
   }
 
   try {
-    // 直連 CF Benchmarks 前端內部數據 API
-    const response = await fetch("https://www.cfbenchmarks.com/api/indices/BRTI", {
+    // 呼叫該網站真實存在的內部數據 JSON 端點
+    const response = await fetch("https://www.cfbenchmarks.com/data/indices/index.json", {
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept": "application/json",
@@ -21,21 +20,29 @@ export default async function handler(req, res) {
     });
 
     if (!response.ok) {
-      throw new Error(`CF 內部 API 請求失敗，狀態碼: ${response.status}`);
+      throw new Error(`CF 數據請求失敗，HTTP 狀態碼: ${response.status}`);
     }
 
     const data = await response.json();
     
-    // 取得即時 BRTI 數值
-    const rawValue = data.value || data.price || (data.payload && data.payload.value);
+    // 陣列或物件解析：尋找 id 或 ticker 為 BRTI 的項目
+    let rawPrice = null;
 
-    if (!rawValue) {
-      throw new Error("未能讀取到 BRTI 價格");
+    if (Array.isArray(data)) {
+      const brtiItem = data.find(item => item.id === "BRTI" || item.ticker === "BRTI" || item.name === "BRTI");
+      if (brtiItem) {
+        rawPrice = brtiItem.price || brtiItem.value || brtiItem.last;
+      }
+    } else if (typeof data === "object") {
+      rawPrice = data.BRTI?.price || data.BRTI?.value || data.price || data.value;
     }
 
-    const numericPrice = Number(rawValue);
+    if (!rawPrice) {
+      throw new Error("無法從 JSON 中解析出 BRTI 價格數值");
+    }
 
-    // 回傳與官網完全一致的價格與格式
+    const numericPrice = Number(rawPrice);
+
     return res.status(200).json({
       symbol: "BRTI",
       price: numericPrice,
